@@ -49,7 +49,6 @@ Get the distinct activity types for one email address
 
 
 	MATCH p=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
-	WHERE NOT (a)-[:NEXT]->()
 	RETURN COLLECT(DISTINCT a.type)	
 
 Get the count of activity types one to three steps from an opportunity:
