@@ -25,7 +25,6 @@ Import the data:
 	CREATE (a:Activity {date: date(row.date), type:row.activity})
 	CREATE (e)-[:PERFORMED]->(a);
 
-
 Link the activities in an ordered list:
 
 	MATCH (e:Email)-[r:PERFORMED]->(a)
@@ -38,15 +37,13 @@ Link the activities in an ordered list:
 	    		CREATE (prev)-[:NEXT]->(next)
 			)));
 
-
 See the full list of activities for one email address:
 
 	MATCH p=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
 	WHERE NOT (a)-[:NEXT]->()
 	RETURN p
 
-Get the distinct activity types for one email address
-
+Get the distinct activity types for one email address:
 
 	MATCH p=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
 	RETURN COLLECT(DISTINCT a.type)	
