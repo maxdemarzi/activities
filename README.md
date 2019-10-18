@@ -111,10 +111,13 @@ What is the most likely next activity for this user to take based on their last 
 	RETURN a4.type, COUNT(*) AS count
 	ORDER BY count DESC
 
+What if we created custom relationship types for the next action using APOC?
 
-MATCH (a1:Activity)-[:NEXT]->(a2:Activity)
-CALL apoc.create.relationship(a1, "NEXT_" + toUpper(a2.type), {}, a2) YIELD rel
-RETURN COUNT(rel)
+	MATCH (a1:Activity)-[:NEXT]->(a2:Activity)
+	CALL apoc.create.relationship(a1, "NEXT_" + toUpper(a2.type), {}, a2) YIELD rel
+	RETURN COUNT(rel)
+
+Then we could query like this, and check just the relationship type instead of the next node property:
 
 	PROFILE MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
 	WHERE SIZE((a)-[:NEXT]->()) = 0
@@ -126,11 +129,23 @@ RETURN COUNT(rel)
 	RETURN a4.type, COUNT(*) AS count
 	ORDER BY count DESC
 
+But that isn't much better. What if we constructed the relationship types and ran them using apoc.cypher.run:
 
-MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*3..]->(a)
-WITH nodes(path)[-3] AS activity, 
-REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
-SET activity.next_activities = key
+	PROFILE MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+    WHERE SIZE((a)-[:NEXT]->()) = 0
+    WITH [at IN nodes(path)| at.type][-3..] AS last
+    CALL apoc.cypher.run("MATCH (a1:Activity)-[:NEXT_" + toUpper(last[1]) +"]->(a2)-[:NEXT_" + toUpper(last[2]) +"]->(a3)-[:NEXT]->(a4) WHERE a1.type ='" + last[0] +"' RETURN a4.type AS type, COUNT(*) AS count", null) YIELD value    
+    RETURN  value.type, value.count
+    ORDER BY value.count DESC
+
+That looks pretty ugly and it makes things a bit better, not really doesn't make much of a difference. We need a new approach. What if instead, we created a sort of static path index of what the next actions where for this action?
+
+	MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*3..]->(a)
+	WITH nodes(path)[-3] AS activity, 
+	REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
+	SET activity.next_activities = key
+
+Let's do it for all the email addresses, and all the actions. We need emails have have performed more than 2 actions, and we will run this query until we no longer update any properties:
 
 
 	MATCH (e:Email)
@@ -145,40 +160,21 @@ SET activity.next_activities = key
 	REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
 	SET activity.next_activities = key
 
+Predict what the next action for this user may be based on what others users have done in the past:
 
-	
-	
-	CALL apoc.cypher.run("MATCH (a1:Activity)-[:NEXT_" + toUpper(last[1]) +"]->(a2)-[:NEXT_" + toUpper(last[2]) +"]->(a3)-[:NEXT]->(a4) WHERE a1.type =" + last[0] +" RETURN at.type AS type, COUNT(*) AS count", null) YIELD value	
-	RETURN  value.type, value.count
-	ORDER BY value.count DESC
-
-
-
-PROFILE MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
 	WHERE SIZE((a)-[:NEXT]->()) = 0
-	WITH [at IN nodes(path)| at.type][-3..] AS last
-	CALL apoc.cypher.run("MATCH (a1:Activity)-[:NEXT_" + toUpper(last[1]) +"]->(a2)-[:NEXT_" + toUpper(last[2]) +"]->(a3)-[:NEXT]->(a4) WHERE a1.type =" + last[0] +" RETURN at.type AS type, COUNT(*) AS count", null) YIELD value	
-	RETURN  value.type, value.count
-	ORDER BY value.count DESC
-
-call apoc.cypher.run("match (:`"+label+"`) return count(*) as count", null) yield value
-
-
-MATCH path = (at:ActivityType)-[:NEXT*..5]->()
-WHERE ALL (r IN relationships(path) WHERE r.count > 1)
-RETURN [at IN nodes(path)| at.name] AS actions, reduce(sum=0, r IN relationships(path) | sum + r.count) AS score, [r IN relationships(path) | r.count] AS counts
-ORDER BY score DESC
-LIMIT 10
+	WITH REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
+    MATCH (a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3)-[:NEXT]->(a4)
+    WHERE a1.next_activities = key
+    RETURN a4.type, COUNT(*) AS count
+	ORDER BY count DESC
 
 
 
-todo:
+
+Ideas:
      
 	// Jaccard similarity 
     CREATE (e)-[:SIMILAR_ACTIVITIES {score:xx.yy}]->(e2)
-	
-	node to vec on actions ?
-
-
-
-		  
+	// action path graph embedding to predict next action? (node2vec?)
