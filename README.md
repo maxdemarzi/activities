@@ -5,7 +5,8 @@ See activities in Neo4j
 Create our Schema:
 
 	CREATE CONSTRAINT ON (e:Email) assert e.address IS UNIQUE;
-	CREATE CONSTRAINT ON (a:ActivityType) assert a.name IS UNIQUE;
+	CREATE CONSTRAINT ON (at:ActivityType) assert at.name IS UNIQUE;
+	CREATE INDEX ON :Activity(type);
 
 Copy the activities.csv file included in this repository to your Neo4j "import" directory.
 
@@ -25,6 +26,7 @@ Import the data:
 	CREATE (a:Activity {date: date(row.date), type:row.activity})
 	CREATE (e)-[:PERFORMED]->(a);
 
+
 Link the activities in an ordered list:
 
 	MATCH (e:Email)-[r:PERFORMED]->(a)
@@ -36,6 +38,24 @@ Link the activities in an ordered list:
 			FOREACH (next IN [activities[n+1]] |
 	    		CREATE (prev)-[:NEXT]->(next)
 			)));
+
+
+If you have a large dataset, it may be better to link the activities in batches. You can run this query until no more relationships are created:
+
+	MATCH (e:Email) 
+	WHERE SIZE((e)-[:NEXT]->()) = 0 AND SIZE((e)-[:PERFORMED]->()) > 0
+	WITH e
+	LIMIT 100
+	MATCH (e)-[r:PERFORMED]->(a)
+	WITH e, a ORDER BY a.date ASC
+	WITH e, COLLECT(a) AS activities, HEAD(COLLECT(a)) AS first
+	CREATE (e)-[:NEXT]->(first)
+	FOREACH (n IN RANGE(0, SIZE(activities)-2) |
+		FOREACH (prev IN [activities[n]] |
+			FOREACH (next IN [activities[n+1]] |
+	    		CREATE (prev)-[:NEXT]->(next)
+			)));
+
 
 See the full list of activities for one email address:
 
@@ -65,7 +85,100 @@ Compare the distinct activities of two email addresses:
 	       [x IN e2_activities WHERE NOT(x IN e_activities)] AS unique_e2, 
 	       [x IN e_activities WHERE (x IN e2_activities)] AS common
 
+Count the number of activities that followed each other by type:
+
+	MATCH (a1:Activity)-[:NEXT]->(a2:Activity)
+	WITH a1.type AS a1type, a2.type AS a2type, count(*) AS count
+	MATCH (at1:ActivityType {name: a1type}), (at2:ActivityType {name: a2type})
+	MERGE (at1)-[r:NEXT]->(at2)
+	SET r.count = count;
+
+Top random walk by counts:
+
+	MATCH path = (at:ActivityType)-[:NEXT*..5]->()
+	WHERE ALL (r IN relationships(path) WHERE r.count > 1)
+	RETURN [at IN nodes(path)| at.name] AS actions, reduce(sum=0, r IN relationships(path) | sum + r.count) AS score
+	ORDER BY score DESC
+	LIMIT 1
+
+What is the most likely next activity for this user to take based on their last 3 activities:
+
+	PROFILE MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	WHERE SIZE((a)-[:NEXT]->()) = 0
+	WITH [at IN nodes(path)| at.type][-3..] AS last
+	MATCH (a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3)-[:NEXT]->(a4)
+	WHERE a1.type = last[0] AND a2.type = last[1] AND a3.type = last[2]
+	RETURN a4.type, COUNT(*) AS count
+	ORDER BY count DESC
+
+
+MATCH (a1:Activity)-[:NEXT]->(a2:Activity)
+CALL apoc.create.relationship(a1, "NEXT_" + toUpper(a2.type), {}, a2) YIELD rel
+RETURN COUNT(rel)
+
+	PROFILE MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	WHERE SIZE((a)-[:NEXT]->()) = 0
+	WITH [at IN nodes(path)| at.type][-3..] AS last
+	MATCH (a1:Activity)-[r1]->(a2)-[r2]->(a3)-[:NEXT]->(a4)
+	WHERE a1.type = last[0] 
+	  AND TYPE(r2) = last[1]
+	  AND TYPE(r3) = last[2]
+	RETURN a4.type, COUNT(*) AS count
+	ORDER BY count DESC
+
+
+MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*3..]->(a)
+WITH nodes(path)[-3] AS activity, 
+REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
+SET activity.next_activities = key
+
+
+	MATCH (e:Email)
+	WHERE SIZE((e)-[:PERFORMED]->()) > 2
+	WITH e 
+	MATCH (e)-[:NEXT]->(a)
+	WHERE NOT EXISTS(a.next_activities)
+	WITH e
+	LIMIT 100
+	MATCH path=(e)-[:NEXT*3..]->(a)
+	WITH nodes(path)[-3] AS activity, 
+	REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
+	SET activity.next_activities = key
+
+
+	
+	
+	CALL apoc.cypher.run("MATCH (a1:Activity)-[:NEXT_" + toUpper(last[1]) +"]->(a2)-[:NEXT_" + toUpper(last[2]) +"]->(a3)-[:NEXT]->(a4) WHERE a1.type =" + last[0] +" RETURN at.type AS type, COUNT(*) AS count", null) YIELD value	
+	RETURN  value.type, value.count
+	ORDER BY value.count DESC
+
+
+
+PROFILE MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	WHERE SIZE((a)-[:NEXT]->()) = 0
+	WITH [at IN nodes(path)| at.type][-3..] AS last
+	CALL apoc.cypher.run("MATCH (a1:Activity)-[:NEXT_" + toUpper(last[1]) +"]->(a2)-[:NEXT_" + toUpper(last[2]) +"]->(a3)-[:NEXT]->(a4) WHERE a1.type =" + last[0] +" RETURN at.type AS type, COUNT(*) AS count", null) YIELD value	
+	RETURN  value.type, value.count
+	ORDER BY value.count DESC
+
+call apoc.cypher.run("match (:`"+label+"`) return count(*) as count", null) yield value
+
+
+MATCH path = (at:ActivityType)-[:NEXT*..5]->()
+WHERE ALL (r IN relationships(path) WHERE r.count > 1)
+RETURN [at IN nodes(path)| at.name] AS actions, reduce(sum=0, r IN relationships(path) | sum + r.count) AS score, [r IN relationships(path) | r.count] AS counts
+ORDER BY score DESC
+LIMIT 10
+
+
+
 todo:
      
 	// Jaccard similarity 
     CREATE (e)-[:SIMILAR_ACTIVITIES {score:xx.yy}]->(e2)
+	
+	node to vec on actions ?
+
+
+
+		  
