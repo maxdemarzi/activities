@@ -45,7 +45,7 @@ If you have a large dataset, it may be better to link the activities in batches.
 	MATCH (e:Email) 
 	WHERE SIZE((e)-[:NEXT]->()) = 0 AND SIZE((e)-[:PERFORMED]->()) > 0
 	WITH e
-	LIMIT 100
+	LIMIT 1000
 	MATCH (e)-[r:PERFORMED]->(a)
 	WITH e, a ORDER BY a.date ASC
 	WITH e, COLLECT(a) AS activities, HEAD(COLLECT(a)) AS first
@@ -59,13 +59,13 @@ If you have a large dataset, it may be better to link the activities in batches.
 
 See the full list of activities for one email address:
 
-	MATCH p=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	MATCH p=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
 	WHERE NOT (a)-[:NEXT]->()
 	RETURN p
 
 Get the distinct activity types for one email address:
 
-	MATCH p=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	MATCH p=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
 	RETURN COLLECT(DISTINCT a.type)	
 
 Get the count of activity types one to three steps from an opportunity:
@@ -77,8 +77,8 @@ Get the count of activity types one to three steps from an opportunity:
 
 Compare the distinct activities of two email addresses:
 
-	MATCH p=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a),
-		p2=(e2:Email {address: "birddog@mac.com"})-[:NEXT*]->(a2)
+	MATCH p=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a),
+		p2=(e2:Email {address: "ghost5@msn.com"})-[:NEXT*]->(a2)
 	WITH COLLECT(DISTINCT a.type) AS e_activities, 
 	     COLLECT(DISTINCT a2.type) AS e2_activities
 	RETURN [x IN e_activities WHERE NOT(x IN e2_activities)] AS unique_e, 
@@ -103,7 +103,7 @@ Top random walk by counts:
 
 What is the most likely next activity for this user to take based on their last 3 activities:
 
-	PROFILE MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	PROFILE MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
 	WHERE SIZE((a)-[:NEXT]->()) = 0
 	WITH [at IN nodes(path)| at.type][-3..] AS last
 	MATCH (a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3)-[:NEXT]->(a4)
@@ -119,7 +119,7 @@ What if we created custom relationship types for the next action using APOC?
 
 Then we could query like this, and check just the relationship type instead of the next node property:
 
-	PROFILE MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	PROFILE MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
 	WHERE SIZE((a)-[:NEXT]->()) = 0
 	WITH [at IN nodes(path)| at.type][-3..] AS last
 	MATCH (a1:Activity)-[r1]->(a2)-[r2]->(a3)-[:NEXT]->(a4)
@@ -131,7 +131,7 @@ Then we could query like this, and check just the relationship type instead of t
 
 But that isn't much better. What if we constructed the relationship types and ran them using apoc.cypher.run:
 
-	PROFILE MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	PROFILE MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
     WHERE SIZE((a)-[:NEXT]->()) = 0
     WITH [at IN nodes(path)| at.type][-3..] AS last
     CALL apoc.cypher.run("MATCH (a1:Activity)-[:NEXT_" + toUpper(last[1]) +"]->(a2)-[:NEXT_" + toUpper(last[2]) +"]->(a3)-[:NEXT]->(a4) WHERE a1.type ='" + last[0] +"' RETURN a4.type AS type, COUNT(*) AS count", null) YIELD value    
@@ -140,7 +140,7 @@ But that isn't much better. What if we constructed the relationship types and ra
 
 That looks pretty ugly and it makes things a bit better, not really doesn't make much of a difference. We need a new approach. What if instead, we created a sort of static path index of what the next actions where for this action?
 
-	MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*3..]->(a)
+	MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*3..]->(a)
 	WITH nodes(path)[-3] AS activity, 
 	REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
 	SET activity.next_activities = key
@@ -154,15 +154,19 @@ Let's do it for all the email addresses, and all the actions. We need emails hav
 	MATCH (e)-[:NEXT]->(a)
 	WHERE NOT EXISTS(a.next_activities)
 	WITH e
-	LIMIT 100
+	LIMIT 1000
 	MATCH path=(e)-[:NEXT*3..]->(a)
 	WITH nodes(path)[-3] AS activity, 
 	REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
 	SET activity.next_activities = key
 
+Index the next_activities property of the Activity nodes:
+
+	CREATE INDEX ON :Activity(next_activities);
+
 Predict what the next action for this user may be based on what others users have done in the past:
 
-	MATCH path=(e:Email {address: "duchamp@hotmail.com"})-[:NEXT*]->(a)
+	MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
 	WHERE SIZE((a)-[:NEXT]->()) = 0
 	WITH REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
     MATCH (a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3)-[:NEXT]->(a4)
@@ -170,11 +174,105 @@ Predict what the next action for this user may be based on what others users hav
     RETURN a4.type, COUNT(*) AS count
 	ORDER BY count DESC
 
+What should the next action for this user be if we want to get to an opportunity quickly:
+
+	MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
+	WHERE SIZE((a)-[:NEXT]->()) = 0
+	WITH REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
+    MATCH path1=(a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3)-[:NEXT]->(a4)-[:NEXT]->(a5)
+    WHERE a1.next_activities = key
+	  AND a5.type = "opportunity"
+	RETURN a4.type, COUNT(DISTINCT path1) AS count
+	ORDER BY count DESC
+
+What should the next action for this user be if we want to get to an opportunity eventually:
+
+	MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
+	WHERE SIZE((a)-[:NEXT]->()) = 0
+	WITH REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
+	MATCH path1=(a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3)-[:NEXT]->(a4), path2=(a4)-[:NEXT*]->(a5)
+    WHERE a1.next_activities = key
+      AND ANY (x IN nodes(path2) WHERE x.type = "opportunity")
+	RETURN a4.type, COUNT(DISTINCT path1) AS count
+	ORDER BY count DESC
+
+The next_activities string property can be pretty long:
+
+	"next_activities": "meetup-download-discovery"
+
+In a production environment, maybe we can shorten it a bit. First remove it:
+
+	MATCH (n:Activity) REMOVE n.next_activities		
 
 
+Then use just the first two characters of the activity type for the key:
+
+	MATCH (e:Email)
+	WHERE SIZE((e)-[:PERFORMED]->()) > 2
+	WITH e 
+	MATCH (e)-[:NEXT]->(a)
+	WHERE NOT EXISTS(a.next_activities)
+	WITH e
+	LIMIT 1000
+	MATCH path=(e)-[:NEXT*3..]->(a)
+	WITH nodes(path)[-3] AS activity, 
+	REDUCE(types = LEFT(nodes(path)[-3].type,2), n IN nodes(path)[-2..]| types + "-" +  LEFT(n.type,2)) AS key
+	SET activity.next_activities = key
+
+Use the shorter version of they key:
+
+	MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
+	WHERE SIZE((a)-[:NEXT]->()) = 0
+	WITH REDUCE(types = LEFT(nodes(path)[-3].type,2), n IN nodes(path)[-2..]| types + "-" +  LEFT(n.type,2)) AS key
+	MATCH path1=(a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3)-[:NEXT]->(a4), path2=(a4)-[:NEXT*]->(a5)
+    WHERE a1.next_activities = key
+      AND ANY (x IN nodes(path2) WHERE x.type = "opportunity")
+	RETURN a4.type, COUNT(DISTINCT path1) AS count
+	ORDER BY count DESC
+
+
+If we wanted to preduct their next activity with just their last two activies, we could use STARTS WITH against the next_activities property:
+
+	MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
+	WHERE SIZE((a)-[:NEXT]->()) = 0
+	WITH nodes(path)[-2].type + "-" +  nodes(path)[-1].type AS key
+	MATCH path1=(a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3), path2=(a3)-[:NEXT*]->(a4)
+    WHERE a1.next_activities STARTS WITH key
+      AND ANY (x IN nodes(path2) WHERE x.type = "opportunity")
+	RETURN a3.type, COUNT(DISTINCT path1) AS count
+	ORDER BY count DESC
+
+What about just winning activities:
+
+	MATCH (e:Email)
+	WHERE SIZE((e)-[:PERFORMED]->()) > 2
+	WITH e 
+	MATCH (e)-[:NEXT]->(a)
+	WHERE NOT EXISTS(a.next_winning_activities)
+	WITH e
+    MATCH (e)-[:PERFORMED]->(a)
+    WHERE a.type = "opportunity"
+	WITH DISTINCT e
+	LIMIT 1000
+	MATCH path=(e)-[:NEXT*3..]->(a), path2=(a)-[:NEXT*]->()
+	WHERE ANY (x IN tail(nodes(path2)) WHERE x.type = "opportunity")
+	WITH nodes(path)[-3] AS activity, 
+	REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
+	SET activity.next_winning_activities = key
+
+	CREATE INDEX ON :Activity(next_winning_activities);
+
+
+	MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
+	WHERE SIZE((a)-[:NEXT]->()) = 0
+	WITH REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
+    MATCH path1=(a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3)-[:NEXT]->(a4)
+    WHERE a1.next_winning_activities = key
+	RETURN a4.type, COUNT(DISTINCT path1) AS count
+	ORDER BY count DESC
 
 Ideas:
-     
+
 	// Jaccard similarity 
     CREATE (e)-[:SIMILAR_ACTIVITIES {score:xx.yy}]->(e2)
 	// action path graph embedding to predict next action? (node2vec?)
