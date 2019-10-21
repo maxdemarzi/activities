@@ -101,6 +101,14 @@ Top random walk by counts:
 	ORDER BY score DESC
 	LIMIT 1
 
+Pagerank of Activity Type:
+
+	CALL algo.pageRank.stream('ActivityType', 'NEXT', {iterations:20, dampingFactor:0.85})
+	YIELD nodeId, score
+	RETURN algo.asNode(nodeId).name AS page,score
+	ORDER BY score DESC
+
+
 What is the most likely next activity for this user to take based on their last 3 activities:
 
 	PROFILE MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
@@ -110,6 +118,7 @@ What is the most likely next activity for this user to take based on their last 
 	WHERE a1.type = last[0] AND a2.type = last[1] AND a3.type = last[2]
 	RETURN a4.type, COUNT(*) AS count
 	ORDER BY count DESC
+	LIMIT 5
 
 What if we created custom relationship types for the next action using APOC?
 
@@ -119,13 +128,13 @@ What if we created custom relationship types for the next action using APOC?
 
 Then we could query like this, and check just the relationship type instead of the next node property:
 
-	PROFILE MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
+	MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
 	WHERE SIZE((a)-[:NEXT]->()) = 0
 	WITH [at IN nodes(path)| at.type][-3..] AS last
 	MATCH (a1:Activity)-[r1]->(a2)-[r2]->(a3)-[:NEXT]->(a4)
 	WHERE a1.type = last[0] 
-	  AND TYPE(r2) = last[1]
-	  AND TYPE(r3) = last[2]
+	  AND TYPE(r1) = "NEXT_" + toUpper(last[1])
+	  AND TYPE(r2) = "NEXT_" + toUpper(last[2])
 	RETURN a4.type, COUNT(*) AS count
 	ORDER BY count DESC
 
@@ -145,7 +154,7 @@ That looks pretty ugly and it makes things a bit better, not really doesn't make
 	REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
 	SET activity.next_activities = key
 
-Let's do it for all the email addresses, and all the actions. We need emails have have performed more than 2 actions, and we will run this query until we no longer update any properties:
+Let's do it for all the email addresses, and all the actions. We need emails have have performed more than 2 actions, and their first activity doesn't have the "next_activities" property set. We will run this query until we no longer update any properties, 1000 emails at a time, so in our case we run it 5 times:
 
 
 	MATCH (e:Email)
@@ -181,6 +190,7 @@ What should the next action for this user be if we want to get to an opportunity
 	WITH REDUCE(types = nodes(path)[-3].type, n IN nodes(path)[-2..]| types + "-" +  n.type) AS key
     MATCH path1=(a1:Activity)-[:NEXT]->(a2)-[:NEXT]->(a3)-[:NEXT]->(a4)-[:NEXT]->(a5)
     WHERE a1.next_activities = key
+	  AND a4.type <> "opportunity"
 	  AND a5.type = "opportunity"
 	RETURN a4.type, COUNT(DISTINCT path1) AS count
 	ORDER BY count DESC
@@ -231,7 +241,7 @@ Use the shorter version of they key:
 	ORDER BY count DESC
 
 
-If we wanted to preduct their next activity with just their last two activies, we could use STARTS WITH against the next_activities property:
+If we wanted to predict their next activity with just their last two activies, we could use STARTS WITH against the next_activities property:
 
 	MATCH path=(e:Email {address: "drezet2@icloud.com"})-[:NEXT*]->(a)
 	WHERE SIZE((a)-[:NEXT]->()) = 0
